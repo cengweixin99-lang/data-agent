@@ -9,8 +9,11 @@ __pycache__/
 logs/
 .env
 .env.*
+!.env.example
 .idea/misc.xml
 docker/embedding/
 docker/elasticsearch/plugins/*.zip
 
 .idea/
+# Evaluation reports
+eval_reports/

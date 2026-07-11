@@ -1,0 +1,72 @@
+cases:
+  - id: sales_amount_by_region
+    question: 统计各地区销售额
+    expected_tables: [fact_order, dim_region]
+    expected_columns: [order_amount, region_name]
+    tags: [聚合, 地区, 销售额]
+
+  - id: top3_products_by_region_quantity
+    question: 统计各地区销售量排行前三的产品
+    expected_tables: [fact_order, dim_region, dim_product]
+    expected_columns: [order_quantity, region_name, product_name]
+    tags: [TopN, 地区, 商品, 销量]
+
+  - id: north_region_total_amount
+    question: 统计华北地区的销售总额
+    expected_tables: [fact_order, dim_region]
+    expected_columns: [order_amount, region_name]
+    tags: [过滤, 地区, 销售额]
+
+  - id: quantity_by_category
+    question: 统计各品类的销量
+    expected_tables: [fact_order, dim_product]
+    expected_columns: [order_quantity, category]
+    tags: [聚合, 品类, 销量]
+
+  - id: amount_by_member_level
+    question: 统计不同会员等级的销售额
+    expected_tables: [fact_order, dim_customer]
+    expected_columns: [order_amount, member_level]
+    tags: [聚合, 会员, 销售额]
+
+  - id: sales_amount_by_month
+    question: 统计各月份销售额
+    expected_tables: [fact_order, dim_date]
+    expected_columns: [order_amount, month]
+    tags: [聚合, 时间, 月份, 销售额]
+
+  - id: sales_amount_by_quarter
+    question: 统计各季度销售额
+    expected_tables: [fact_order, dim_date]
+    expected_columns: [order_amount, quarter]
+    tags: [聚合, 时间, 季度, 销售额]
+
+  - id: top5_products_by_sales_amount
+    question: 查询销售额最高的前5个商品
+    expected_tables: [fact_order, dim_product]
+    expected_columns: [order_amount, product_name]
+    tags: [TopN, 商品, 销售额]
+
+  - id: sales_amount_by_brand
+    question: 统计各品牌销售额
+    expected_tables: [fact_order, dim_product]
+    expected_columns: [order_amount, brand]
+    tags: [聚合, 品牌, 销售额]
+
+  - id: quantity_by_gender
+    question: 统计不同性别用户的购买数量
+    expected_tables: [fact_order, dim_customer]
+    expected_columns: [order_quantity, gender]
+    tags: [聚合, 性别, 销量]
+
+  - id: order_count_by_member_level
+    question: 统计不同会员等级的订单数
+    expected_tables: [fact_order, dim_customer]
+    expected_columns: [order_id, member_level]
+    tags: [聚合, 会员, 订单数]
+
+  - id: sales_amount_by_region_and_category
+    question: 统计各地区各品类销售额
+    expected_tables: [fact_order, dim_region, dim_product]
+    expected_columns: [order_amount, region_name, category]
+    tags: [聚合, 地区, 品类, 销售额]

@@ -39,5 +39,4 @@ es:
   index_name: data_agent
 llm:
   model_name: doubao-seed-2-0-pro-260215
-  api_key: your_api_key
   base_url: https://ark.cn-beijing.volces.com/api/v3

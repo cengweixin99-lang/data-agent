@@ -52,8 +52,29 @@
             </div>
           </div>
 
+          <!-- 节点轨迹 -->
+          <div v-else-if="msg.type === 'trace-node'" class="trace-node">
+            <button class="trace-header" type="button" @click="toggleTrace(msg)">
+              <span class="trace-title">{{ msg.title || msg.node }}</span>
+              <span :class="['trace-state', msg.status]">{{ telemetryStatusLabel(msg.status) }}</span>
+              <span v-if="msg.durationMs !== undefined" class="trace-duration">{{ msg.durationMs }} ms</span>
+              <span class="trace-toggle">{{ msg.collapsed ? "展开" : "收起" }}</span>
+            </button>
+            <pre v-show="!msg.collapsed && msg.content" class="trace-content">{{ msg.content }}</pre>
+          </div>
+
           <!-- 表格 -->
           <div v-else-if="msg.type === 'table'" class="table-wrap">
+            <div v-if="msg.sql || msg.meta" class="result-meta">
+              <div class="result-stats">
+                <span v-if="msg.meta?.rowCount !== undefined">行数：{{ msg.meta.rowCount }}</span>
+                <span v-if="msg.meta?.correctionAttempts !== undefined">
+                  纠错：{{ msg.meta.correctionAttempts }} 次
+                </span>
+                <span v-if="msg.meta?.elapsedMs !== undefined">耗时：{{ msg.meta.elapsedMs }} ms</span>
+              </div>
+              <pre v-if="msg.sql" class="sql-details">{{ msg.sql }}</pre>
+            </div>
             <table class="result-table">
               <thead>
               <tr>
@@ -70,6 +91,24 @@
               </tr>
               </tbody>
             </table>
+            <div v-if="msg.rows.length === 0" class="empty-result">暂无数据</div>
+          </div>
+
+          <!-- 诊断 -->
+          <div v-else-if="msg.type === 'diagnostics'" class="diagnostics">
+            <div class="diagnostics-title">节点运行状态</div>
+            <div
+                v-for="(item, dIdx) in msg.items"
+                :key="dIdx"
+                :class="['diagnostic-item', item.status]"
+            >
+              <span class="diagnostic-node">{{ item.title || item.node }}</span>
+              <span class="diagnostic-state">{{ telemetryStatusLabel(item.status) }}</span>
+              <span class="diagnostic-duration">
+                {{ item.durationMs !== undefined ? `${item.durationMs} ms` : '...' }}
+              </span>
+              <pre v-if="item.content" class="diagnostic-content">{{ item.content }}</pre>
+            </div>
           </div>
 
           <!-- 错误 -->
@@ -126,8 +165,56 @@ function extractTableRows(data) {
   return null;
 }
 
+function telemetryStatusLabel(status) {
+  if (status === "running") return "运行中";
+  if (status === "success") return "已完成";
+  if (status === "error") return "失败";
+  return status || "未知";
+}
+
+function normalizeTraceEvent(data) {
+  return {
+    id: data.id || data.node,
+    node: data.node,
+    title: data.title || data.node,
+    status: data.status || "running",
+    durationMs: data.duration_ms,
+    metrics: data.metrics || {},
+    content: data.content,
+    delta: data.delta,
+    event: data.event || data.phase,
+  };
+}
+
+function normalizeResultMeta(data, rows, requestStartedAt) {
+  if (!data || typeof data !== "object") {
+    return {
+      rowCount: rows.length,
+      elapsedMs: Math.round(performance.now() - requestStartedAt),
+    };
+  }
+
+  return {
+    rowCount: data.meta?.row_count ?? rows.length,
+    correctionAttempts: data.correction_attempts ?? data.meta?.correction_attempts,
+    elapsedMs: Math.round(performance.now() - requestStartedAt),
+  };
+}
+
 function toggleSteps(msg) {
   msg.collapsed = !msg.collapsed;
+}
+
+function toggleTrace(msg) {
+  msg.collapsed = !msg.collapsed;
+}
+
+function collapseTraceMessages() {
+  for (const msg of messages.value) {
+    if (msg.type === "trace-node") {
+      msg.collapsed = true;
+    }
+  }
 }
 
 async function sendQuestion() {
@@ -165,6 +252,8 @@ async function sendQuestion() {
     let buffer = "";
 
     let hasFinalResult = false;
+    let requestStartedAt = performance.now();
+    const traceMessageIndexes = new Map();
 
     while (true) {
       const {value, done} = await reader.read();
@@ -217,6 +306,65 @@ async function sendQuestion() {
           });
         }
 
+        // trace：一个节点一个对话气泡，并支持增量内容
+        else if (typeof data === "object" && data?.type === "trace") {
+          const trace = normalizeTraceEvent(data);
+          let traceIndex = traceMessageIndexes.get(trace.id);
+
+          if (traceIndex === undefined) {
+            traceIndex = messages.value.push({
+              role: "assistant",
+              type: "trace-node",
+              id: trace.id,
+              node: trace.node,
+              title: trace.title,
+              status: trace.status,
+              durationMs: trace.durationMs,
+              metrics: trace.metrics,
+              content: "",
+              hasDelta: false,
+              collapsed: false,
+            }) - 1;
+            traceMessageIndexes.set(trace.id, traceIndex);
+          }
+
+          const traceMessage = messages.value[traceIndex];
+          traceMessage.node = trace.node || traceMessage.node;
+          traceMessage.title = trace.title || traceMessage.title;
+          traceMessage.status = trace.status || traceMessage.status;
+          traceMessage.metrics = trace.metrics || traceMessage.metrics;
+          if (trace.durationMs !== undefined) {
+            traceMessage.durationMs = trace.durationMs;
+          }
+
+          if (trace.delta) {
+            if (traceMessage.content && !traceMessage.hasDelta) {
+              traceMessage.content = `${traceMessage.content}\n`;
+            }
+            traceMessage.content = `${traceMessage.content || ""}${trace.delta}`;
+            traceMessage.hasDelta = true;
+          } else if (trace.content) {
+            if (trace.event === "node_start" && !traceMessage.content) {
+              traceMessage.content = trace.content;
+            } else if (!traceMessage.hasDelta && !traceMessage.content.includes(trace.content)) {
+              traceMessage.content = traceMessage.content
+                  ? `${traceMessage.content}\n${trace.content}`
+                  : trace.content;
+            }
+          }
+        }
+
+        // 错误事件必须早于通用 object 结果分支
+        else if (typeof data === "object" && data?.type === "error") {
+          hasFinalResult = true;
+          collapseTraceMessages();
+          messages.value.push({
+            role: "assistant",
+            type: "error",
+            content: data.message || data.error || "发生错误",
+          });
+        }
+
         // ✅ 表格结果：兼容 type=result、直接数组、以及常见包裹字段
         else if (
             (typeof data === "object" && data?.type === "result") ||
@@ -226,21 +374,15 @@ async function sendQuestion() {
           const rows = extractTableRows(data);
           if (!rows) continue;
           hasFinalResult = true;
+          collapseTraceMessages();
           messages.value.push({
             role: "assistant",
             type: "table",
             columns: Object.keys(rows[0] || {}),
             rows,
           });
-        }
 
-        // ✅ 错误
-        else if (typeof data === "object" && data?.type === "error") {
-          messages.value.push({
-            role: "assistant",
-            type: "error",
-            content: data.message || "发生错误",
-          });
+
         }
 
         await nextTick();
@@ -249,6 +391,7 @@ async function sendQuestion() {
     }
 
     if (!hasFinalResult) {
+      collapseTraceMessages();
       messages.value.push({
         role: "assistant",
         type: "error",
@@ -256,6 +399,7 @@ async function sendQuestion() {
       });
     }
   } catch (e) {
+    collapseTraceMessages();
     messages.value.push({
       role: "assistant",
       type: "error",
@@ -454,10 +598,127 @@ async function sendQuestion() {
   }
 }
 
+/* 节点轨迹 */
+.trace-node {
+  min-width: 260px;
+  max-width: 100%;
+}
+
+.trace-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.trace-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-state {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #475569;
+  font-size: 12px;
+}
+
+.trace-state.running {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.trace-state.success {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.trace-state.error {
+  background: #fee2e2;
+  color: #b42318;
+}
+
+.trace-duration {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.trace-toggle {
+  flex: 0 0 auto;
+  color: #2563eb;
+  font-size: 12px;
+}
+
+.trace-content {
+  max-height: 220px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-left: 2px solid #bfdbfe;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #334155;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* 表格 */
 .table-wrap {
   max-width: 100%;
   overflow-x: auto;
+}
+
+.result-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.result-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.result-stats span {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #eef2f7;
+}
+
+.sql-details {
+  max-width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .result-table {
@@ -482,6 +743,83 @@ async function sendQuestion() {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+.empty-result {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.diagnostics {
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diagnostics-title {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.diagnostic-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px 12px;
+  align-items: center;
+  color: #475569;
+  font-size: 12px;
+}
+
+.diagnostic-node {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-state {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+}
+
+.diagnostic-duration {
+  color: #64748b;
+}
+
+.diagnostic-content {
+  grid-column: 1 / -1;
+  max-height: 180px;
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-left: 2px solid #bfdbfe;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #334155;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diagnostic-item.running .diagnostic-state {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.diagnostic-item.success .diagnostic-state {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.diagnostic-item.error .diagnostic-state {
+  background: #fee2e2;
+  color: #b42318;
 }
 
 /* 错误 */

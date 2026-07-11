@@ -1,4 +1,4 @@
-﻿# Data Agent 智能问数系统
+# Data Agent 智能问数系统
 
 Data Agent 是一个面向数据仓库场景的 Text-to-SQL 智能问数系统。用户可以直接用自然语言提问，系统会自动完成问题理解、元数据召回、SQL 生成、SQL 校验、SQL 执行和结果返回。
 
@@ -355,7 +355,10 @@ flowchart TD
     GS --> VS["validate_sql校验 SQL"]
 
     VS -->|校验通过| RS["run_sql执行 SQL"]
-    VS -->|校验失败| CS["correct_sql修正 SQL"]
+    VS -->|校验失败且未超限| CS["correct_sql修正 SQL"]
+    CS --> VS
+    VS -->|连续失败两次| SF["sql_failure安全终止"]
+    SF --> END
     CS --> RS
     RS --> END
 ```
@@ -419,17 +422,19 @@ flowchart TD
 
 `validate_sql`
 
-- 使用数据库 `EXPLAIN` 对 SQL 做执行前校验。
+- 先检查 SQL 只允许 `SELECT` 或 `WITH`，拦截写操作、多语句和 `FOR UPDATE`。
+- 再使用数据库 `EXPLAIN` 做执行前校验。
 - 校验成功则进入执行节点。
 - 校验失败则记录错误信息，进入 SQL 修正节点。
 
 `correct_sql`
 
 - 根据原始问题、候选上下文、原 SQL 和数据库报错，让 LLM 修正 SQL。
+- 修正后必须回到 `validate_sql`，最多自动纠错 2 次。
 
 `run_sql`
 
-- 执行最终 SQL。
+- 执行最终 SQL，并再次执行只读安全检查。
 - 通过 SSE 返回表格结果给前端。
 
 ## API 说明
@@ -605,22 +610,89 @@ Invoke-WebRequest -Uri http://localhost:8081/embed `
 
 ### 4. LLM 配置
 
-LLM 配置位于：
+LLM 的模型名称和服务地址位于 `conf/app_config.yaml`，API Key 只从环境变量 `OPENAI_API_KEY` 读取，配置文件中不保存密钥。
+
+PowerShell 当前窗口临时配置：
+
+```powershell
+$env:OPENAI_API_KEY = "你的新 API Key"
+```
+
+如果希望对当前 Windows 用户持久保存：
+
+```powershell
+[Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "你的新 API Key", "User")
+```
+
+执行持久配置后，请重新打开 PowerShell 或 IDE，再启动后端。`.env.example` 仅作为变量名模板，项目不自动加载 `.env` 文件。
+
+如果 Key 曾经出现在 Git、日志、截图或聊天记录中，应先在模型服务平台撤销旧 Key 并创建新 Key，然后只设置新 Key，不要把真实值写回配置文件。
+
+## 测试
+
+在不连接 Docker 服务的情况下运行 SQL 安全校验测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+运行 Agent 端到端评测：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.scripts.eval_agent -c .\eval_cases.yaml
+```
+
+评测用例定义在：
 
 ```text
-conf/app_config.yaml
+eval_cases.yaml
 ```
 
-示例：
+评测报告默认输出到：
 
-```yaml
-llm:
-  model_name: doubao-seed-2-0-pro-260215
-  api_key: your_api_key
-  base_url: https://ark.cn-beijing.volces.com/api/v3
+```text
+eval_reports/
 ```
 
-实际提交代码时不建议提交真实 API Key，建议改为环境变量或本地私有配置。
+`eval_reports/` 已加入 `.gitignore`，避免把本地评测产物提交到仓库。
+
+### 当前评测结果
+
+最近一次 12 条核心问数用例评测结果：
+
+| 指标 | 结果 |
+| --- | --- |
+| 用例数 | 12 |
+| 成功率 | 100% |
+| 非空结果率 | 100% |
+| 表命中率 | 100% |
+| 字段命中率 | 100% |
+| 平均耗时 | 11.47s |
+| 平均 SQL 修正次数 | 0 |
+
+平均节点耗时：
+
+| 节点 | 平均耗时 |
+| --- | --- |
+| generate_sql | 6.53s |
+| recall_value | 3.94s |
+| recall_column | 1.01s |
+| recall_metric | 1.01s |
+| extract_keywords | 61.76ms |
+| filter_table | 0.43ms |
+| filter_metric | 0.52ms |
+
+### 性能优化记录
+
+| 优化点 | 效果 |
+| --- | --- |
+| 字段召回和指标召回改为批量 Embedding | 减少多关键词逐次请求 Embedding 服务的开销 |
+| Embedding 客户端增加内存缓存和并发请求去重 | 重复关键词不再重复计算向量 |
+| 分组、排行、趋势类问题默认跳过字段取值召回 | 避免无条件聚合问题误触发 ES/LLM 取值识别 |
+| 小候选集跳过 LLM 过滤 | `filter_table` 和 `filter_metric` 平均耗时降到毫秒级 |
+| SQL 生成使用紧凑上下文 | 减少 Prompt 体积，降低 SQL 生成延迟 |
+| TopN 商品排行增加确定性 SQL 模板 | 典型 TopN 问题从约 30s 降到约 1.35s |
+
+整体平均耗时从早期约 22.65s 优化到约 11.47s，延迟降低约 49%。
 
 ## 启动流程
 
@@ -808,19 +880,18 @@ chcp 65001
 
 ## 项目亮点
 
-- 将 Text-to-SQL 拆成可控的多节点 Agent，而不是单次 Prompt 直接生成 SQL。
-- 使用“结构化元数据 + 向量召回 + 全文检索”的混合知识库设计。
-- 用 Qdrant 解决语义匹配，用 Elasticsearch 解决字段真实取值匹配。
-- 通过 SQL 校验与错误修正降低 SQL 幻觉风险。
-- 通过 SSE 将 Agent 每一步执行进度实时返回前端。
-- 具备从基础服务、知识库构建、后端 API 到前端页面的完整闭环。
+- 构建了基于 LangGraph 的 Text-to-SQL 多节点 Agent，将问数流程拆分为关键词抽取、Schema 召回、指标召回、取值召回、上下文合并、SQL 生成、SQL 校验、SQL 执行等可观测节点。
+- 设计了“结构化元数据 + 向量检索 + 全文检索”的混合知识库：MySQL meta 保存事实元数据，Qdrant 负责字段和指标语义召回，Elasticsearch 负责业务枚举值匹配。
+- 实现 SQL 安全防护链路，只允许 `SELECT` / `WITH` 查询，拦截写操作、多语句和 `FOR UPDATE`，并提供 `validate_sql -> correct_sql -> validate_sql` 自动修正闭环。
+- 实现 SSE 流式可观测能力，前端可以像对话气泡一样实时展示每个 Agent 节点的运行状态、耗时、召回内容和最终结果。
+- 建立端到端评测脚本和评测用例集，输出成功率、表命中率、字段命中率、节点耗时和慢节点分析，用数据驱动优化。
+- 完成从 Docker 基础服务、元知识库构建、后端 API、前端页面、评测脚本到安全配置的完整工程闭环，适合作为 Agent / RAG / Text-to-SQL 方向简历项目。
 
 ## 后续优化方向
 
-- 将 LLM API Key 改为环境变量读取，避免配置文件泄露密钥。
 - 对知识库构建增加幂等逻辑，避免重复构建时需要手动清表。
-- 对 SQL 修正节点增加多轮重试和最大重试次数。
-- 为 Agent 节点增加单元测试和端到端测试。
+- 扩充评测集，覆盖时间筛选、同比环比、占比、复合条件、多轮追问等更复杂场景。
 - 增加查询结果解释、图表推荐和可视化能力。
 - 增加多数据源支持，例如 Hive、ClickHouse、PostgreSQL。
 - 增加权限控制，限制不同用户可访问的数据表和字段。
+- 增加线上观测指标，例如请求耗时分位数、节点失败率、SQL 修正率和模型调用成本。

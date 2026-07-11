@@ -1,5 +1,6 @@
 # 日志配置
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 from omegaconf import OmegaConf
@@ -52,8 +53,8 @@ class ESConfig:
 @dataclass
 class LLMConfig:
     model_name: str
-    api_key: str
     base_url: str
+    api_key: str = ""
 
 @dataclass
 class AppConfig:
@@ -72,3 +73,4 @@ context = OmegaConf.load(config_file)
 schema = OmegaConf.structured(AppConfig)
 # 4. 合并 schema 和配置内容，转为 python 对象
 app_config: AppConfig = OmegaConf.to_object(OmegaConf.merge(schema, context))
+app_config.llm.api_key = os.getenv("OPENAI_API_KEY", "").strip()

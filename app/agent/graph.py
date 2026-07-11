@@ -15,6 +15,8 @@ from app.agent.nodes.recall_metric import recall_metric
 from app.agent.nodes.recall_value import recall_value
 from app.agent.nodes.run_sql import run_sql
 from app.agent.nodes.validate_sql import validate_sql
+from app.agent.nodes.sql_failure import sql_failure
+from app.agent.observability import instrument_node
 from app.agent.state import DataAgentState
 from app.clients.embedding_client_manager import embedding_client_manager
 from app.clients.es_client_manager import es_client_manager
@@ -29,18 +31,19 @@ from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantReposit
 graph_builder = StateGraph(state_schema=DataAgentState, context_schema=DataAgentContext)
 
 # 添加节点
-graph_builder.add_node("extract_keywords", extract_keywords)
-graph_builder.add_node("recall_column", recall_column)
-graph_builder.add_node("recall_value", recall_value)
-graph_builder.add_node("recall_metric", recall_metric)
-graph_builder.add_node("merge_retrieved_info", merge_retrieved_info)
-graph_builder.add_node("filter_metric", filter_metric)
-graph_builder.add_node("filter_table", filter_table)
-graph_builder.add_node("add_extra_context", add_extra_context)
-graph_builder.add_node("generate_sql", generate_sql)
-graph_builder.add_node("validate_sql", validate_sql)
-graph_builder.add_node("correct_sql", correct_sql)
-graph_builder.add_node("run_sql", run_sql)
+graph_builder.add_node("extract_keywords", instrument_node("extract_keywords", extract_keywords))
+graph_builder.add_node("recall_column", instrument_node("recall_column", recall_column))
+graph_builder.add_node("recall_value", instrument_node("recall_value", recall_value))
+graph_builder.add_node("recall_metric", instrument_node("recall_metric", recall_metric))
+graph_builder.add_node("merge_retrieved_info", instrument_node("merge_retrieved_info", merge_retrieved_info))
+graph_builder.add_node("filter_metric", instrument_node("filter_metric", filter_metric))
+graph_builder.add_node("filter_table", instrument_node("filter_table", filter_table))
+graph_builder.add_node("add_extra_context", instrument_node("add_extra_context", add_extra_context))
+graph_builder.add_node("generate_sql", instrument_node("generate_sql", generate_sql))
+graph_builder.add_node("validate_sql", instrument_node("validate_sql", validate_sql))
+graph_builder.add_node("correct_sql", instrument_node("correct_sql", correct_sql))
+graph_builder.add_node("run_sql", instrument_node("run_sql", run_sql))
+graph_builder.add_node("sql_failure", instrument_node("sql_failure", sql_failure))
 
 # 添加关系
 graph_builder.add_edge(START, "extract_keywords")
@@ -57,13 +60,26 @@ graph_builder.add_edge("filter_metric", "add_extra_context")
 graph_builder.add_edge("add_extra_context", "generate_sql")
 graph_builder.add_edge("generate_sql", "validate_sql")
 
-graph_builder.add_conditional_edges(source="validate_sql",
-                                    path=lambda state: "run_sql" if state['error'] is None
-                                    else "correct_sql",
-                                    path_map={"run_sql": "run_sql", "correct_sql": "correct_sql"})
-graph_builder.add_edge("correct_sql", "run_sql")
-graph_builder.add_edge("run_sql", END)
+def route_after_validation(state: DataAgentState) -> str:
+    if state.get("error") is None:
+        return "run_sql"
+    if state.get("correction_attempts", 0) < 2:
+        return "correct_sql"
+    return "sql_failure"
 
+
+graph_builder.add_conditional_edges(
+    source="validate_sql",
+    path=route_after_validation,
+    path_map={
+        "run_sql": "run_sql",
+        "correct_sql": "correct_sql",
+        "sql_failure": "sql_failure",
+    },
+)
+graph_builder.add_edge("correct_sql", "validate_sql")
+graph_builder.add_edge("run_sql", END)
+graph_builder.add_edge("sql_failure", END)
 graph = graph_builder.compile()
 
 if __name__ == '__main__':
