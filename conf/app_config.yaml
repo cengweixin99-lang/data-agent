@@ -1,0 +1,43 @@
+logging:
+  file:
+    enable: true
+    level: INFO
+    path: logs
+    rotation: "10MB"
+    retention: "7day"
+  console:
+    enable: true
+    level: INFO
+
+db_meta:
+  host: localhost
+  port: 3307
+  user: atguigu
+  password: Atguigu.123
+  database: meta
+
+db_dw:
+  host: localhost
+  port: 3307
+  user: atguigu
+  password: Atguigu.123
+  database: dw
+
+qdrant:
+  host: localhost
+  port: 6333
+  embedding_size: 1024
+
+embedding:
+  host: localhost
+  port: 8081
+  model: BAAI/bge-large-zh-v1.5
+
+es:
+  host: localhost
+  port: 9200
+  index_name: data_agent
+llm:
+  model_name: doubao-seed-2-0-pro-260215
+  api_key: f383b519-23af-40de-9894-5f5615c3fb8b
+  base_url: https://ark.cn-beijing.volces.com/api/v3

@@ -1,0 +1,16 @@
+.venv/
+.venv_old/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+logs/
+.env
+.env.*
+.idea/misc.xml
+docker/embedding/
+docker/elasticsearch/plugins/*.zip
+
+.idea/
