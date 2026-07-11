@@ -51,16 +51,23 @@ def try_generate_template_sql(query: str) -> str | None:
     measure_column, measure_alias = measure
 
     if "地区" in query:
-        return f"""WITH ranked_products AS (
+        return f"""WITH product_sales AS (
     SELECT
         r.region_name AS 地区,
         p.product_name AS 商品名称,
-        SUM(f.{measure_column}) AS {measure_alias},
-        ROW_NUMBER() OVER (PARTITION BY r.region_id, r.region_name ORDER BY SUM(f.{measure_column}) DESC) AS 排名
+        SUM(f.{measure_column}) AS {measure_alias}
     FROM fact_order f
     INNER JOIN dim_region r ON f.region_id = r.region_id
     INNER JOIN dim_product p ON f.product_id = p.product_id
-    GROUP BY r.region_id, r.region_name, p.product_id, p.product_name
+    GROUP BY r.region_name, p.product_name
+),
+ranked_products AS (
+    SELECT
+        地区,
+        商品名称,
+        {measure_alias},
+        ROW_NUMBER() OVER (PARTITION BY 地区 ORDER BY {measure_alias} DESC) AS 排名
+    FROM product_sales
 )
 SELECT 地区 AS 地区, 商品名称 AS 商品名称, {measure_alias} AS {measure_alias}
 FROM ranked_products
@@ -72,6 +79,6 @@ ORDER BY 地区, 排名"""
     SUM(f.{measure_column}) AS {measure_alias}
 FROM fact_order f
 INNER JOIN dim_product p ON f.product_id = p.product_id
-GROUP BY p.product_id, p.product_name
+GROUP BY p.product_name
 ORDER BY {measure_alias} DESC
 LIMIT {top_n}"""

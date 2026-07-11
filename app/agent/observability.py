@@ -21,6 +21,7 @@ _NODE_TITLES = {
     "validate_sql": "校验 SQL",
     "correct_sql": "修正 SQL",
     "run_sql": "执行 SQL",
+    "explain_result": "解读结果",
     "sql_failure": "SQL 验证失败",
 }
 
@@ -101,6 +102,10 @@ def summarize_trace_content(update: dict[str, Any] | None) -> str:
         lines.append(f"SQL：{sql}")
     if update.get("error"):
         lines.append(f"错误：{update['error']}")
+    if update.get("result_rows") is not None:
+        lines.append(f"查询结果：{len(update['result_rows'])} 行")
+    if update.get("result_analysis"):
+        lines.append(str(update["result_analysis"]))
     if update.get("date_info"):
         lines.append("已补充日期上下文。")
     if update.get("db_info"):

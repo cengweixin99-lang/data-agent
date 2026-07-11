@@ -9,6 +9,10 @@ cases:
     question: 统计各地区销售量排行前三的产品
     expected_tables: [fact_order, dim_region, dim_product]
     expected_columns: [order_quantity, region_name, product_name]
+    checks:
+      max_rows_per_group:
+        group_column: 地区
+        max_rows: 3
     tags: [TopN, 地区, 商品, 销量]
 
   - id: north_region_total_amount

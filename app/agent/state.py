@@ -50,5 +50,7 @@ class DataAgentState(TypedDict):
     date_info: DateInfoState
     db_info: DBInfoState
     sql: str
+    result_rows: list[dict]
+    result_analysis: str
     error: str
     correction_attempts: int

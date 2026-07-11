@@ -24,6 +24,7 @@ async def run_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]):
             "correction_attempts": state.get("correction_attempts", 0),
             "meta": {"row_count": len(result)},
         })
+        return {"result_rows": result}
     except Exception as error:
         logger.error(f"SQL execution failed: {error}")
         writer({"type": "progress", "step": "执行SQL", "status": "error"})

@@ -30,6 +30,7 @@ class EvalCase:
     expected_tables: list[str]
     expected_columns: list[str]
     tags: list[str]
+    checks: dict[str, Any]
 
 
 def _load_cases(path: Path) -> list[EvalCase]:
@@ -43,6 +44,7 @@ def _load_cases(path: Path) -> list[EvalCase]:
                 expected_tables=list(raw.get("expected_tables", [])),
                 expected_columns=list(raw.get("expected_columns", [])),
                 tags=list(raw.get("tags", [])),
+                checks=dict(raw.get("checks", {})),
             )
         )
     return cases
@@ -57,6 +59,36 @@ def _contains_all(sql: str, expected: list[str]) -> tuple[bool, list[str], list[
 
 def _safe_row_count(rows: Any) -> int:
     return len(rows) if isinstance(rows, list) else 0
+
+
+def _run_semantic_checks(rows: list[Any], checks: dict[str, Any]) -> tuple[bool, list[dict[str, Any]]]:
+    failures: list[dict[str, Any]] = []
+
+    max_rows_per_group = checks.get("max_rows_per_group")
+    if max_rows_per_group:
+        group_column = max_rows_per_group.get("group_column")
+        max_rows = int(max_rows_per_group.get("max_rows", 0))
+        counts: dict[Any, int] = {}
+        if group_column and max_rows > 0:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                group_value = row.get(group_column)
+                counts[group_value] = counts.get(group_value, 0) + 1
+            overflow = {
+                str(group): count
+                for group, count in counts.items()
+                if count > max_rows
+            }
+            if overflow:
+                failures.append({
+                    "check": "max_rows_per_group",
+                    "group_column": group_column,
+                    "max_rows": max_rows,
+                    "overflow": overflow,
+                })
+
+    return len(failures) == 0, failures
 
 
 def _extract_node_timings(traces: list[dict[str, Any]]) -> tuple[dict[str, float], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -118,17 +150,20 @@ async def _run_case(case: EvalCase, context: DataAgentContext) -> dict[str, Any]
     table_ok, hit_tables, missing_tables = _contains_all(sql, case.expected_tables)
     column_ok, hit_columns, missing_columns = _contains_all(sql, case.expected_columns)
     row_count = _safe_row_count(rows)
+    semantic_ok, semantic_failures = _run_semantic_checks(rows, case.checks)
     node_timings, node_runs, slowest_nodes = _extract_node_timings(traces)
 
     return {
         "id": case.id,
         "question": case.question,
         "tags": case.tags,
-        "success": error is None and bool(sql),
+        "success": error is None and bool(sql) and semantic_ok,
         "error": error,
         "sql": sql,
         "row_count": row_count,
         "non_empty_result": row_count > 0,
+        "semantic_check": semantic_ok,
+        "semantic_failures": semantic_failures,
         "elapsed_ms": elapsed_ms,
         "correction_attempts": correction_attempts,
         "expected_tables": case.expected_tables,
@@ -170,6 +205,7 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "non_empty_rate": ratio("non_empty_result"),
         "table_hit_rate": ratio("table_hit"),
         "column_hit_rate": ratio("column_hit"),
+        "semantic_check_rate": ratio("semantic_check"),
         "avg_elapsed_ms": round(sum(item["elapsed_ms"] for item in results) / total, 2),
         "avg_correction_attempts": round(sum(item["correction_attempts"] for item in results) / total, 2),
         "avg_node_timings": avg_node_timings,

@@ -9,6 +9,7 @@ from app.agent.nodes.extract_keywords import extract_keywords
 from app.agent.nodes.filter_metric import filter_metric
 from app.agent.nodes.filter_table import filter_table
 from app.agent.nodes.generate_sql import generate_sql
+from app.agent.nodes.explain_result import explain_result
 from app.agent.nodes.merge_retrieved_info import merge_retrieved_info
 from app.agent.nodes.recall_column import recall_column
 from app.agent.nodes.recall_metric import recall_metric
@@ -43,6 +44,7 @@ graph_builder.add_node("generate_sql", instrument_node("generate_sql", generate_
 graph_builder.add_node("validate_sql", instrument_node("validate_sql", validate_sql))
 graph_builder.add_node("correct_sql", instrument_node("correct_sql", correct_sql))
 graph_builder.add_node("run_sql", instrument_node("run_sql", run_sql))
+graph_builder.add_node("explain_result", instrument_node("explain_result", explain_result))
 graph_builder.add_node("sql_failure", instrument_node("sql_failure", sql_failure))
 
 # 添加关系
@@ -78,7 +80,8 @@ graph_builder.add_conditional_edges(
     },
 )
 graph_builder.add_edge("correct_sql", "validate_sql")
-graph_builder.add_edge("run_sql", END)
+graph_builder.add_edge("run_sql", "explain_result")
+graph_builder.add_edge("explain_result", END)
 graph_builder.add_edge("sql_failure", END)
 graph = graph_builder.compile()
 
